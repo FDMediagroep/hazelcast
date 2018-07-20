@@ -21,8 +21,6 @@ import com.fasterxml.jackson.dataformat.smile.SmileFactory;
 import com.hazelcast.config.SerializationConfig;
 import com.hazelcast.config.SerializerConfig;
 import com.hazelcast.internal.serialization.impl.DefaultSerializationServiceBuilder;
-import com.hazelcast.nio.ObjectDataInput;
-import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.spi.serialization.SerializationService;
 import com.hazelcast.test.HazelcastSerialClassRunner;
 import com.hazelcast.test.annotation.QuickTest;
@@ -31,9 +29,6 @@ import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 
@@ -46,10 +41,11 @@ public class CustomSmileBasedSerializationTest {
     // https://blog.hazelcast.com/comparing-serialization-methods/  (
     // June 13, 2013
 
-    // Issue 1:
-    // a null object is returned instead of the original
+    // in order to prevent issues it is important to
+    // implement ByteArraySerializer instead of StreamSerializer
+
     @Test
-    public void testSerializerIssue1() {
+    public void testSerializer() {
         SerializationConfig config = new SerializationConfig();
         config.setUseNativeByteOrder(false);
         SerializerConfig sc = new SerializerConfig()
@@ -64,18 +60,8 @@ public class CustomSmileBasedSerializationTest {
         assertEquals(newFoo, foo);
     }
 
-    // Issue 2: reuse of buffers in BufferPoolImpl fails
-    //	at com.hazelcast.internal.serialization.impl.SerializationUtil.handleSerializeException(SerializationUtil.java:75)
-    //	at com.hazelcast.internal.serialization.impl.AbstractSerializationService.toBytes(AbstractSerializationService.java:157)
-    //	at com.hazelcast.internal.serialization.impl.AbstractSerializationService.toBytes(AbstractSerializationService.java:133)
-    //	at com.hazelcast.internal.serialization.impl.AbstractSerializationService.toData(AbstractSerializationService.java:118)
-    //	at com.hazelcast.internal.serialization.impl.AbstractSerializationService.toData(AbstractSerializationService.java:106)
-    // ..
-    // Caused by: java.lang.NullPointerException
-    //	at com.hazelcast.internal.serialization.impl.ByteArrayObjectDataOutput.position(ByteArrayObjectDataOutput.java:399)
-    //	at com.hazelcast.internal.serialization.impl.AbstractSerializationService.toBytes(AbstractSerializationService.java:144)
     @Test
-    public void testSerializerIssue2() {
+    public void testSequenceOfTwoSerializations() {
         SerializationConfig config = new SerializationConfig();
         config.setUseNativeByteOrder(false);
         SerializerConfig sc = new SerializerConfig()
@@ -87,7 +73,6 @@ public class CustomSmileBasedSerializationTest {
         Data d = ss.toData(foo);
         Foo newFoo = ss.toObject(d);
 
-        // second time: reuse of buffer
         Data d2 = ss.toData(foo);
         Foo newFoo2 = ss.toObject(d2);
 
@@ -135,12 +120,10 @@ public class CustomSmileBasedSerializationTest {
         }
     }
 
-    public static class FooSmileSerializer implements StreamSerializer<Foo> {
+    public static class FooSmileSerializer implements ByteArraySerializer<Foo> {
 
         private SmileFactory f = new SmileFactory();
         private ObjectMapper mapper = new ObjectMapper(f);
-
-        AtomicInteger serializationCount = new AtomicInteger();
 
         @Override
         public int getTypeId() {
@@ -148,15 +131,13 @@ public class CustomSmileBasedSerializationTest {
         }
 
         @Override
-        public void write(ObjectDataOutput out, Foo object) throws IOException {
-            serializationCount.incrementAndGet();
-            mapper.writeValue((OutputStream) out, object);
-            ((OutputStream) out).flush();
+        public byte[] write(Foo foo) throws IOException {
+            return mapper.writeValueAsBytes(foo);
         }
 
         @Override
-        public Foo read(ObjectDataInput in) throws IOException {
-            return mapper.readValue((InputStream) in, Foo.class);
+        public Foo read(byte[] bytes) throws IOException {
+            return mapper.readValue(bytes, Foo.class);
         }
 
         @Override
